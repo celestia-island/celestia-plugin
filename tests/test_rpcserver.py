@@ -140,15 +140,37 @@ def test_artifact_register_and_fetch(server):
     (job_dir / "report.json").write_text('{"ok": true}')
     artifact = store.register("job0001abcd", "report.json")
 
-    with urllib.request.urlopen(f"{base}/api/artifacts/{artifact.id}", timeout=5) as resp:
+    # no token → 401 (the artifact id is addressing, not authorization)
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        urllib.request.urlopen(f"{base}/api/artifacts/{artifact.id}", timeout=5)
+    assert excinfo.value.code == 401
+
+    with urllib.request.urlopen(f"{base}/api/artifacts/{artifact.id}?token={TOKEN}", timeout=5) as resp:
         assert resp.status == 200
         assert json.loads(resp.read().decode()) == {"ok": True}
+
+
+def test_non_ascii_token_answers_401_not_broken_pipe(server):
+    """hmac.compare_digest(str) raises on non-ASCII — the gate must answer
+    401 instead of dropping the connection. Real clients percent-encode
+    query strings, so that is the wire shape we exercise."""
+    import urllib.parse
+
+    _, base = server
+    encoded = urllib.parse.quote("tökén-非ascii")
+    req = urllib.request.Request(f"{base}/api/rpc?token={encoded}", data=b"{}")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    assert status == 401
 
 
 def test_artifact_fetch_404(server):
     _, base = server
     with pytest.raises(urllib.error.HTTPError) as excinfo:
-        urllib.request.urlopen(f"{base}/api/artifacts/doesnotexist", timeout=5)
+        urllib.request.urlopen(f"{base}/api/artifacts/doesnotexist?token={TOKEN}", timeout=5)
     assert excinfo.value.code == 404
 
 

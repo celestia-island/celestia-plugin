@@ -108,11 +108,14 @@ def artifacts_dir_from_env(env_var: str = "CELESTIA_ENGINE_ARTIFACTS") -> Path:
     return path
 
 
-def ensure_prerequisites(env_var: str = "CELESTIA_ENGINE_TOKEN") -> None:
+def ensure_prerequisites(
+    token_env: str = "CELESTIA_ENGINE_TOKEN",
+    artifacts_env: str = "CELESTIA_ENGINE_ARTIFACTS",
+) -> None:
     """Early, explicit failure for the two required env pieces — a bare
     `python -m service` on a misconfigured host must die before binding."""
-    token_from_env(env_var)
-    artifacts_dir_from_env()
+    token_from_env(token_env)
+    artifacts_dir_from_env(artifacts_env)
 
 
 def main_entry(argv: list[str] | None = None, *, name: str, version: str,

@@ -66,6 +66,10 @@ class ArtifactStore:
         if not filename or "/" in filename or "\\" in filename or filename.startswith("."):
             raise ArtifactError(f"invalid artifact filename: {filename!r}")
         path = self.root / job_id / filename
+        if path.is_symlink():
+            # A symlink swapped into the job dir would make us hash (and the
+            # HTTP face serve) files outside the store root.
+            raise ArtifactError(f"artifact must be a regular file: {filename}")
         if not path.is_file():
             raise ArtifactError(f"artifact file missing: {filename}")
         digest = hashlib.sha256(path.read_bytes()).hexdigest()

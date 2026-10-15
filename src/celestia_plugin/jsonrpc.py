@@ -103,11 +103,11 @@ def parse_message(raw: bytes | str) -> list[RpcRequest]:
     if isinstance(payload, list):
         if not payload:
             raise RpcError(INVALID_REQUEST, "empty batch")
-        return [_parse_one(entry, batch=True) for entry in payload]
-    return [_parse_one(payload, batch=False)]
+        return [_parse_one(entry) for entry in payload]
+    return [_parse_one(payload)]
 
 
-def _parse_one(entry: Any, batch: bool) -> RpcRequest:
+def _parse_one(entry: Any) -> RpcRequest:
     if not isinstance(entry, dict):
         raise RpcError(INVALID_REQUEST, "request is not an object")
     if entry.get("jsonrpc") != JSONRPC_VERSION:
@@ -115,17 +115,18 @@ def _parse_one(entry: Any, batch: bool) -> RpcRequest:
     method = entry.get("method")
     if not isinstance(method, str) or not method:
         raise RpcError(INVALID_REQUEST, "missing method")
+    params = entry.get("params")
+    if params is not None and not isinstance(params, dict):
+        # By-name dialect: positional (array) params have no meaning here —
+        # rejecting beats folding them into {} and executing the wrong job.
+        raise RpcError(INVALID_REQUEST, "params must be an object")
     if "id" in entry:
         rid = entry["id"]
-        if rid is not None and not isinstance(rid, (str, int)):
+        # bool is an int subclass — reject it before the int arm (2.0 §4.1:
+        # id is String | Number | NULL, and `true` is not a Number here).
+        if rid is not None and (isinstance(rid, bool) or not isinstance(rid, (str, int))):
             raise RpcError(INVALID_REQUEST, "id must be string or number")
         return RpcRequest(
-            method=method,
-            params=entry.get("params") or {},
-            id=rid,
-            is_notification=False,
+            method=method, params=params or {}, id=rid, is_notification=False
         )
-    if batch and ("id" not in entry):
-        # A member-less batch entry is still a valid notification.
-        pass
-    return RpcRequest(method=method, params=entry.get("params") or {}, id=None, is_notification=True)
+    return RpcRequest(method=method, params=params or {}, id=None, is_notification=True)

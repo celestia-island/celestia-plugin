@@ -41,7 +41,7 @@ from .jsonrpc import (
     parse_message,
     result_response,
 )
-from .artifacts import ArtifactStore
+from .artifacts import ArtifactError, ArtifactStore
 from .jobs import JobTable
 
 log = logging.getLogger("celestia_plugin.rpc")
@@ -125,7 +125,7 @@ class RpcServer:
 
     def _events_poll(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
         since = params.get("since", 0)
-        if not isinstance(since, int) or since < 0:
+        if isinstance(since, bool) or not isinstance(since, int) or since < 0:
             raise RpcError(-32000, "since must be a non-negative integer")
         with self._event_lock:
             events = [payload for seq, payload in self._events if seq > since]
@@ -160,6 +160,9 @@ class RpcServer:
                 return None
             from .jsonrpc import error_response
 
+            # Deliberate: engines are internal, post-auth surfaces, and the
+            # operator's panel needs the real reason more than secrecy from
+            # authenticated callers. A public-facing host would redact here.
             return error_response(
                 req.id, INTERNAL_ERROR, f"{type(exc).__name__}: {exc}"
             ).to_payload()
@@ -201,6 +204,9 @@ class RpcServer:
 
         class _Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
+            # Slow-client (slowloris) defense: a connection that stalls this
+            # long loses the socket instead of pinning a thread forever.
+            timeout = 30
 
             def log_message(self, fmt: str, *args: Any) -> None:  # silence stderr
                 log.debug("%s " + fmt, self.address_string(), *args)
@@ -211,7 +217,9 @@ class RpcServer:
                 if body:
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
-                else:
+                elif status != 204:
+                    # 204 MUST NOT carry Content-Length (RFC 7230 §3.3.2);
+                    # any other empty reply still needs explicit framing.
                     self.send_header("Content-Length", "0")
                 self.end_headers()
                 if body:
@@ -220,7 +228,11 @@ class RpcServer:
             def _authorized(self) -> bool:
                 query = urllib.parse.urlparse(self.path).query
                 token = urllib.parse.parse_qs(query).get("token", [""])[0]
-                return bool(token) and hmac.compare_digest(token, rpc.token)
+                if not token:
+                    return False
+                # bytes comparison: str compare_digest raises on non-ASCII,
+                # which would drop the connection instead of answering 401
+                return hmac.compare_digest(token.encode("utf-8"), rpc.token.encode("utf-8"))
 
             def do_POST(self) -> None:  # noqa: N802 - stdlib contract
                 path = urllib.parse.urlparse(self.path).path
@@ -241,15 +253,22 @@ class RpcServer:
                     self._send_json(200, rpc.health_payload())
                     return
                 if rpc.artifacts is not None and parsed.path.startswith("/api/artifacts/"):
+                    # Same token gate as the RPC face — the artifact id is
+                    # an addressing scheme, not the authorization.
+                    if not self._authorized():
+                        self._send_json(401, {"error": "unauthorized"})
+                        return
                     artifact_id = parsed.path.rsplit("/", 1)[-1]
                     artifact = rpc.artifacts.get(artifact_id)
                     if artifact is None:
                         self._send_json(404, {"error": "unknown artifact"})
                         return
-                    path = rpc.artifacts.path_of(artifact)
                     try:
+                        path = rpc.artifacts.path_of(artifact)
                         data = path.read_bytes()
-                    except OSError:
+                    except (ArtifactError, OSError):
+                        # containment trip (e.g. a symlink swapped in after
+                        # registration) is a server fault, not a hang
                         self._send_json(500, {"error": "artifact unreadable"})
                         return
                     self.send_response(200)

@@ -7,7 +7,6 @@ is the engine's single source of truth for `*.status` / `*.cancel` RPCs.
 
 from __future__ import annotations
 
-import itertools
 import logging
 import threading
 import time
@@ -46,7 +45,6 @@ class Job:
     error: str | None = None
     # Owner-only bits (never serialized by `snapshot`).
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
-    _seq: "itertools.count" = field(default_factory=itertools.count, repr=False)
 
     def report_progress(self, frac: float | None, message: str = "") -> None:
         """Publish a progress step. `frac` is 0..1 or None (indeterminate)."""
@@ -84,6 +82,8 @@ class JobTable:
     jobs with a semaphore (queued beyond it); `None` = unbounded."""
 
     def __init__(self, max_workers: int | None = None) -> None:
+        if max_workers is not None and max_workers < 1:
+            raise ValueError(f"max_workers must be >= 1 or None (unbounded), got {max_workers}")
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []

@@ -47,6 +47,9 @@ def test_parse_error_on_garbage():
         {"jsonrpc": "2.0", "id": 1, "method": ""},      # empty method
         {"jsonrpc": "2.0", "id": 1.5, "method": "m"},   # fractional id
         {"jsonrpc": "2.0", "id": [1], "method": "m"},   # array id
+        {"jsonrpc": "2.0", "id": True, "method": "m"},  # bool id (int subclass)
+        {"jsonrpc": "2.0", "id": 1, "method": "m", "params": [1, 2]},  # positional
+        {"jsonrpc": "2.0", "id": 1, "method": "m", "params": "x"},     # string params
     ],
 )
 def test_invalid_entries_rejected(entry):

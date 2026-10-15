@@ -41,6 +41,10 @@ def require(cfg: dict[str, Any], key: str, expected_type: type | tuple[type, ...
     if key not in cfg:
         raise ConfigError(f"missing required config key: {key}")
     value = cfg[key]
+    # bool is an int subclass; `token: true` must not pass a str/int check.
+    expected = expected_type if isinstance(expected_type, tuple) else (expected_type,)
+    if isinstance(value, bool) and bool not in expected:
+        raise ConfigError(f"config key {key} must be {'/'.join(t.__name__ for t in expected)}")
     if not isinstance(value, expected_type):
         raise ConfigError(
             f"config key {key} has wrong type: {type(value).__name__} (expected "

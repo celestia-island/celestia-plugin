@@ -42,6 +42,30 @@ def test_invalid_job_id_rejected(tmp_path):
         store.register("BAD_ID", "x.bin")
 
 
+def test_symlink_in_job_dir_rejected(tmp_path):
+    """M2 mutation evidence demanded this: deleting path_of containment once
+    left the whole suite green. These tests must go red if containment or
+    the symlink rejection regresses."""
+    store = ArtifactStore(tmp_path / "root")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("top secret")
+    link = store.job_dir("jobabc123") / "leak.bin"
+    link.symlink_to(outside)
+    with pytest.raises(ArtifactError):
+        store.register("jobabc123", "leak.bin")
+
+
+def test_path_of_containment_even_for_crafted_ids(tmp_path):
+    """path_of is the last line of defense: an entry whose stored filename
+    somehow points outside the root must raise, not resolve."""
+    from celestia_plugin.artifacts import Artifact
+
+    store = ArtifactStore(tmp_path / "root")
+    hostile = Artifact(id="bad000000001", job_id="jobabc123", filename="../../outside.txt", size=1, sha256="0" * 64)
+    with pytest.raises(ArtifactError):
+        store.path_of(hostile)
+
+
 def test_list_scopes_by_job(tmp_path):
     store = ArtifactStore(tmp_path / "root")
     for job in ("job000000001", "job000000002"):

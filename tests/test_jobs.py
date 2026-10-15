@@ -120,6 +120,12 @@ def test_max_workers_bounds_concurrency():
     assert max(peak) == 1
 
 
+def test_max_workers_zero_is_rejected():
+    import pytest
+    with pytest.raises(ValueError):
+        JobTable(max_workers=0)
+
+
 def test_event_sink_receives_lifecycle():
     events = []
     table = JobTable()
