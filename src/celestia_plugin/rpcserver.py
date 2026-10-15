@@ -223,7 +223,9 @@ class RpcServer:
                     # An early answer leaves the request body unread; on a
                     # keep-alive connection that body would be parsed as the
                     # next request line and poison whatever rides the pooled
-                    # connection next. Half-close instead of draining.
+                    # connection next. Half-close instead of draining (the
+                    # wire announcement rides the status line below,
+                    # RFC 7230 §6.6 SHOULD).
                     self.close_connection = True
                 try:
                     body = b"" if payload is None else json.dumps(payload).encode("utf-8")
@@ -237,6 +239,8 @@ class RpcServer:
                                    "message": "handler result is not JSON-serializable"}}
                     ).encode("utf-8")
                 self.send_response(status)
+                if status >= 400:
+                    self.send_header("Connection", "close")
                 if body:
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))

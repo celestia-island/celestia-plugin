@@ -309,14 +309,24 @@ def test_early_answer_does_not_poison_keep_alive_connection(server):
     # disconnect — not the "400 Bad request syntax" garbage the poisoned
     # connection used to answer — and a fresh connection serves normally.
     good = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "engine.info"}).encode()
-    # whichever way the half-close races the client, the reuse must end in
-    # a DISCONNECT (BrokenPipe on send / EOF on read) — never the poisoned
-    # "400 Bad request syntax" reply the old behavior produced.
-    with pytest.raises((http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError)):
+    # With the half-close announced on the wire, http.client transparently
+    # reconnects and gets its answer; without the announcement it meets a
+    # clean disconnect. Both are correct. The POISONED form — an actual
+    # "400 Bad request syntax" reply riding the dead connection — fails
+    # the status assertion below.
+    outcome = "clean-disconnect"
+    try:
         conn.request("POST", f"/api/rpc?token={TOKEN}", body=good,
                      headers={"Content-Type": "application/json"})
-        conn.getresponse()
+        resp = conn.getresponse()
+        body = json.loads(resp.read().decode())
+        assert resp.status == 200, f"poisoned reply: {resp.status}"
+        assert body["result"]["name"] == "test-engine"
+        outcome = "transparent-reconnect"
+    except (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError):
+        pass
     conn.close()
+    assert outcome in ("clean-disconnect", "transparent-reconnect")
 
     conn2 = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5)
     conn2.request("POST", f"/api/rpc?token={TOKEN}", body=good,
