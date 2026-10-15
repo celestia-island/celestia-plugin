@@ -77,13 +77,22 @@ class Job:
         }
 
 
+class QueueFullError(RuntimeError):
+    """Raised by `submit` when the table holds `max_queued` live jobs."""
+
+
 class JobTable:
     """Thread-backed job table. `max_workers` bounds concurrent RUNNING
-    jobs with a semaphore (queued beyond it); `None` = unbounded."""
+    jobs with a semaphore (queued beyond it); `max_queued` bounds how many
+    live (queued-or-running) jobs may exist before `submit` refuses — a
+    token-gated engine still deserves a queue ceiling. `None` = unbounded."""
 
-    def __init__(self, max_workers: int | None = None) -> None:
+    def __init__(self, max_workers: int | None = None, max_queued: int | None = None) -> None:
         if max_workers is not None and max_workers < 1:
             raise ValueError(f"max_workers must be >= 1 or None (unbounded), got {max_workers}")
+        if max_queued is not None and max_queued < 1:
+            raise ValueError(f"max_queued must be >= 1 or None (unbounded), got {max_queued}")
+        self._max_queued = max_queued
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
@@ -96,9 +105,23 @@ class JobTable:
         self._on_event = sink
 
     def submit(self, name: str, fn: Callable[[Job], Any]) -> Job:
-        """Spawn `fn(handle)` on a daemon thread; returns the handle."""
+        """Spawn `fn(handle)` on a daemon thread; returns the handle.
+
+        Raises `QueueFullError` when `max_queued` live jobs are already
+        held (queued or running) — refusing beats queueing work a caller
+        will never live to see."""
         job = Job(id=uuid.uuid4().hex[:12], name=name)
         with self._lock:
+            if self._max_queued is not None:
+                live = sum(
+                    1
+                    for jid in self._order
+                    if self._jobs[jid].state in (QUEUED, RUNNING)
+                )
+                if live >= self._max_queued:
+                    raise QueueFullError(
+                        f"job table holds {live} live jobs (max_queued={self._max_queued})"
+                    )
             self._jobs[job.id] = job
             self._order.append(job.id)
         thread = threading.Thread(
