@@ -148,6 +148,16 @@ def _dummy_ctx():
     )
 
 
+def test_events_poll_on_never_emitted_server_is_clean():
+    """P3-3: the empty-ring sentinel (`oldest = nxt + 1`) must yield a
+    clean zero-drop answer, including for a stale `since`."""
+    rpc = RpcServer(token=TOKEN)
+    result = rpc._events_poll({"since": 0}, _dummy_ctx())
+    assert result == {"events": [], "next": 0, "dropped": 0}
+    result = rpc._events_poll({"since": 7}, _dummy_ctx())
+    assert result["dropped"] == 0 and result["events"] == []
+
+
 def test_serialization_variants_answer_500(server):
     """v0.2 red-test debt: ValueError (circular) and RecursionError (deep
     nesting) must answer the structured 500 like TypeError does."""

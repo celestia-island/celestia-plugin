@@ -39,11 +39,12 @@ class EngineServer:
         token: str,
         artifacts_dir: str | os.PathLike[str] | None = None,
         max_workers: int | None = 2,
+        max_queued: int | None = None,
         config_file: str | None = None,
     ) -> None:
         self.name = name
         self.version = version
-        self.jobs = JobTable(max_workers=max_workers)
+        self.jobs = JobTable(max_workers=max_workers, max_queued=max_queued)
         self.artifacts = ArtifactStore(artifacts_dir) if artifacts_dir else None
         self.rpc = RpcServer(
             token=token, name=name, version=version, jobs=self.jobs, artifacts=self.artifacts
