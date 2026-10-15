@@ -9,7 +9,7 @@ import pytest
 
 from celestia_plugin.artifacts import ArtifactStore
 from celestia_plugin.jobs import JobTable
-from celestia_plugin.rpcserver import RpcServer
+from celestia_plugin.rpcserver import _EVENT_RING, RpcServer
 
 TOKEN = "test-token-0123456789"
 
@@ -120,6 +120,60 @@ def test_notification_only_batch_answers_204(server):
     with urllib.request.urlopen(req, timeout=5) as resp:
         assert resp.status == 204
     assert seen == [{"x": 1}]
+
+
+def test_events_poll_reports_dropped_tail():
+    """v0.2: the lossy ring now tells the poller what it missed — emit far
+    past the ring size, then read from 0: dropped must equal the evicted
+    head (first survivor - 1)."""
+    rpc = RpcServer(token=TOKEN)
+    total = _EVENT_RING + 200
+    for i in range(total):
+        rpc.emit("tick", {"i": i})
+    result = rpc._events_poll({"since": 0}, _dummy_ctx())
+    assert result["next"] == total
+    assert len(result["events"]) == _EVENT_RING
+    # first survivor's seq = total - ring; dropped = survivors_seq - 1
+    assert result["dropped"] == total - _EVENT_RING
+    # a fresh tail poll drops nothing
+    result = rpc._events_poll({"since": total}, _dummy_ctx())
+    assert result["dropped"] == 0 and result["events"] == []
+
+
+def _dummy_ctx():
+    from celestia_plugin.rpcserver import RequestContext
+
+    return RequestContext(
+        jobs=None, artifacts=None, server_name="t", server_version="0", remote_addr="127.0.0.1"
+    )
+
+
+def test_serialization_variants_answer_500(server):
+    """v0.2 red-test debt: ValueError (circular) and RecursionError (deep
+    nesting) must answer the structured 500 like TypeError does."""
+    rpc, base = server
+
+    @rpc.method("bad.circular")
+    def circular(_params, _ctx):
+        d = {}
+        d["self"] = d
+        return d
+
+    @rpc.method("bad.deep")
+    def deep(_params, _ctx):
+        value = []
+        for _ in range(100_000):
+            value = [value]
+        return {"nest": value}
+
+    for method in ("bad.circular", "bad.deep"):
+        status, payload = rpc_call(base, method)
+        assert status == 500, (method, status)
+        assert payload["error"]["code"] == -32603
+        assert "JSON-serializable" in payload["error"]["message"], method
+    # server still alive
+    status, _ = rpc_call(base, "engine.info")
+    assert status == 200
 
 
 def test_events_ring_roundtrip(server):

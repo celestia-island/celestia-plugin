@@ -9,7 +9,7 @@ from .jsonrpc import (
     result_response,
 )
 from .rpcserver import RpcServer, RequestContext
-from .jobs import Job, JobTable
+from .jobs import Job, JobTable, QueueFullError
 from .artifacts import ArtifactStore
 from .config import load_config
 from .engine import EngineServer, artifacts_dir_from_env, ensure_prerequisites, token_from_env
@@ -22,6 +22,7 @@ __all__ = [
     "EngineServer",
     "Job",
     "JobTable",
+    "QueueFullError",
     "RequestContext",
     "RpcError",
     "RpcRequest",

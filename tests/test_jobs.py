@@ -120,6 +120,31 @@ def test_max_workers_bounds_concurrency():
     assert max(peak) == 1
 
 
+def test_max_queued_bounds_live_jobs():
+    import pytest
+
+    from celestia_plugin.jobs import QueueFullError
+
+    table = JobTable(max_workers=1, max_queued=1)
+    release = threading.Event()
+    table.submit("blocker", lambda _job: release.wait(5) or None)
+    time.sleep(0.05)  # the blocker occupies the single live slot
+    with pytest.raises(QueueFullError):
+        table.submit("second", lambda _job: 1)
+    release.set()
+    drain(table)
+    # slot freed → submits pass again
+    table.submit("after", lambda _job: 1)
+    drain(table)
+
+
+def test_max_queued_zero_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        JobTable(max_queued=0)
+
+
 def test_max_workers_zero_is_rejected():
     import pytest
     with pytest.raises(ValueError):

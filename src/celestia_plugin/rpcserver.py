@@ -133,7 +133,12 @@ class RpcServer:
         with self._event_lock:
             events = [payload for seq, payload in self._events if seq > since]
             nxt = self._event_seq
-        return {"events": events, "next": nxt}
+            # Lossy-by-design ring made visible: how many events in the
+            # poller's gap were evicted before the oldest survivor. A
+            # consumer that cares can detect the hole and resync state.
+            oldest = self._events[0][0] if self._events else nxt + 1
+            dropped = max(0, oldest - since - 1)
+        return {"events": events, "next": nxt, "dropped": dropped}
 
     def _engine_info(self, _params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
         return {"name": self.name, "version": self.version, "methods": sorted(self._methods)}
