@@ -150,6 +150,91 @@ def test_artifact_register_and_fetch(server):
         assert json.loads(resp.read().decode()) == {"ok": True}
 
 
+def test_unserializable_handler_result_answers_500_not_disconnect(server):
+    """R2 N1: a handler returning a set used to TypeError past the JSON
+    boundary and drop the connection. It must answer a structured 500 and
+    keep serving."""
+    rpc, base = server
+
+    @rpc.method("bad.return")
+    def bad(_params, _ctx):
+        return {"trace": {"0x1f"}}  # a set is not JSON-serializable
+
+    status, payload = rpc_call(base, "bad.return")
+    assert status == 500
+    assert payload["error"]["code"] == -32603
+    assert "JSON-serializable" in payload["error"]["message"]
+    # the server survives and keeps answering
+    status, payload = rpc_call(base, "engine.info")
+    assert status == 200
+
+
+def test_batch_of_one_answers_array(server):
+    """R2 N2: a batch with a single member is still a batch — the reply
+    keeps the array shape (the chest fan-out lane rides it)."""
+    rpc, base = server
+    rpc.register("ping.pong", lambda _p, _c: {"pong": True})
+    body = json.dumps([{"jsonrpc": "2.0", "id": 9, "method": "ping.pong"}]).encode()
+    req = urllib.request.Request(f"{base}/api/rpc?token={TOKEN}", data=body)
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        payload = json.loads(resp.read().decode())
+    assert isinstance(payload, list) and payload[0]["result"] == {"pong": True}
+
+
+def test_oversized_body_answers_413(server):
+    """The size gate fires on the header, before any body byte is read —
+    so the probe sends a huge Content-Length with only a stub of body and
+    reads the early 413 off a raw socket (a full 8 MB send would just hit
+    a broken pipe against a server that stopped reading)."""
+    import socket
+
+    _, base = server
+    host, port = base.split("//")[1].split(":")
+    sock = socket.create_connection((host, int(port)), timeout=10)
+    try:
+        head = (
+            f"POST /api/rpc?token={TOKEN} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            "Content-Type: application/json\r\n"
+            "Connection: close\r\n"
+            f"Content-Length: {8 * 1024 * 1024 + 1}\r\n\r\n"
+        ).encode()
+        sock.sendall(head + b'{"jsonrpc":"2.0"')  # stub; the gate fires first
+        data = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        assert data.startswith(b"HTTP/1.1 413"), data[:120]
+    finally:
+        sock.close()
+
+
+def test_slow_client_socket_times_out(tmp_path):
+    """R2 F5 red-test gap: with a short handler_timeout a connection that
+    sends nothing loses the socket instead of pinning the thread."""
+    import socket
+    import time
+
+    rpc = RpcServer(token=TOKEN, handler_timeout=0.5)
+    httpd = rpc.build_http_server("127.0.0.1", 0)
+    host, port = httpd.server_address[:2]
+    import threading
+
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    try:
+        sock = socket.create_connection((host, port), timeout=5)
+        sock.settimeout(5)
+        start = time.time()
+        assert sock.recv(1024) == b""  # server closed the silent connection
+        assert time.time() - start < 3  # ~handler_timeout, not forever
+        sock.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_non_ascii_token_answers_401_not_broken_pipe(server):
     """hmac.compare_digest(str) raises on non-ASCII — the gate must answer
     401 instead of dropping the connection. Real clients percent-encode

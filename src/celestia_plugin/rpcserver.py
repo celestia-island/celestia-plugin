@@ -77,12 +77,14 @@ class RpcServer:
         version: str = "0.0.0",
         jobs: JobTable | None = None,
         artifacts: ArtifactStore | None = None,
+        handler_timeout: float = 30.0,
     ) -> None:
         if not token:
             raise ValueError("refusing to serve without a token — generate a per-engine secret")
         self.token = token
         self.name = name
         self.version = version
+        self.handler_timeout = handler_timeout
         self.jobs = jobs
         self.artifacts = artifacts
         self._methods: dict[str, MethodFn] = {}
@@ -90,6 +92,8 @@ class RpcServer:
         self._event_seq = 0
         self._event_lock = threading.Lock()
         self._started_at = time.time()
+        self._payload_was_batch = False
+        self.max_body_bytes = 8 * 1024 * 1024
         if jobs is not None:
             jobs.set_event_sink(self.emit)
         # Built-ins every engine carries.
@@ -185,6 +189,7 @@ class RpcServer:
             from .jsonrpc import error_response
 
             return 200, error_response(None, exc.code, exc.message).to_payload()
+        self._payload_was_batch = raw.lstrip().startswith(b"[")
 
         replies: list[dict[str, Any]] = []
         for req in requests:
@@ -193,9 +198,9 @@ class RpcServer:
                 replies.append(reply)
         if not replies:
             return 204, None
-        # A single request answers a single object; a batch answers an array
-        # (the chest fan-out lane rides the extra elements).
-        return 200, (replies[0] if len(requests) == 1 else replies)
+        # A bare request answers a single object; a batch (even of one)
+        # answers an array — the chest fan-out lane rides the array shape.
+        return 200, (replies if self._payload_was_batch else replies[0])
 
     # ── HTTP plumbing ───────────────────────────────────────────────
 
@@ -206,13 +211,22 @@ class RpcServer:
             protocol_version = "HTTP/1.1"
             # Slow-client (slowloris) defense: a connection that stalls this
             # long loses the socket instead of pinning a thread forever.
-            timeout = 30
+            timeout = rpc.handler_timeout
 
             def log_message(self, fmt: str, *args: Any) -> None:  # silence stderr
                 log.debug("%s " + fmt, self.address_string(), *args)
 
             def _send_json(self, status: int, payload: Any) -> None:
-                body = b"" if payload is None else json.dumps(payload).encode("utf-8")
+                try:
+                    body = b"" if payload is None else json.dumps(payload).encode("utf-8")
+                except TypeError:
+                    # A handler returned something unserializable — answer a
+                    # structured 500 instead of dropping the connection.
+                    status, body = 500, json.dumps(
+                        {"jsonrpc": JSONRPC_VERSION, "id": None,
+                         "error": {"code": INTERNAL_ERROR,
+                                   "message": "handler result is not JSON-serializable"}}
+                    ).encode("utf-8")
                 self.send_response(status)
                 if body:
                     self.send_header("Content-Type", "application/json")
@@ -243,6 +257,9 @@ class RpcServer:
                     self._send_json(401, {"error": "unauthorized"})
                     return
                 length = int(self.headers.get("Content-Length") or 0)
+                if length > rpc.max_body_bytes:
+                    self._send_json(413, {"error": f"body exceeds {rpc.max_body_bytes} bytes"})
+                    return
                 body = self.rfile.read(length) if length else b""
                 status, payload = rpc.handle_payload(body, self.client_address[0])
                 self._send_json(status, payload)

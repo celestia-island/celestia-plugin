@@ -60,7 +60,11 @@ class ArtifactStore:
         return path
 
     def register(self, job_id: str, filename: str) -> Artifact:
-        """Expose one file already written under the job's directory."""
+        """Expose one file already written under the job's directory.
+
+        The descriptor (size/sha256) is a register-time snapshot; overwriting
+        the file afterwards is not tracked — re-register (which mints a new
+        artifact id) to publish new contents."""
         if not _ID_RE.match(job_id):
             raise ArtifactError(f"invalid job id: {job_id!r}")
         if not filename or "/" in filename or "\\" in filename or filename.startswith("."):

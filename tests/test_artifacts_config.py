@@ -96,6 +96,23 @@ def test_config_env_wins_over_file(tmp_path, monkeypatch):
     assert cfg["from_file"] is True
 
 
+def test_ensure_prerequisites_symmetric_env_names(tmp_path, monkeypatch):
+    """R2 F11: both knobs must be honurable, not just the token one."""
+    from celestia_plugin.engine import ensure_prerequisites
+
+    monkeypatch.delenv("CELESTIA_ENGINE_TOKEN", raising=False)
+    monkeypatch.delenv("CELESTIA_ENGINE_ARTIFACTS", raising=False)
+    with pytest.raises(ConfigError):
+        ensure_prerequisites("MY_TOKEN_VAR", "MY_ARTIFACTS_VAR")  # nothing set
+    monkeypatch.setenv("MY_TOKEN_VAR", "t")
+    with pytest.raises(ConfigError):
+        ensure_prerequisites("MY_TOKEN_VAR", "MY_ARTIFACTS_VAR")  # artifacts missing
+    d = tmp_path / "arts"
+    d.mkdir()
+    monkeypatch.setenv("MY_ARTIFACTS_VAR", str(d))
+    ensure_prerequisites("MY_TOKEN_VAR", "MY_ARTIFACTS_VAR")  # both honoured
+
+
 def test_config_missing_file_and_required_key(tmp_path):
     with pytest.raises(ConfigError):
         load_config(file_path=str(tmp_path / "absent.json"))
