@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "celestia-plugin"
+version = "0.1.0"
+description = "Python plugin/engine SDK for the celestia panel fabric"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "celestia-island" }]
+# Stdlib-only by design: engines run inside minimal containers and on
+# machines we do not control — every third-party dependency is attack
+# surface and wheel-availability risk. Revisit only with a hard reason.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
