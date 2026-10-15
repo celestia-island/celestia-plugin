@@ -219,6 +219,12 @@ class RpcServer:
                 log.debug("%s " + fmt, self.address_string(), *args)
 
             def _send_json(self, status: int, payload: Any) -> None:
+                if status >= 400:
+                    # An early answer leaves the request body unread; on a
+                    # keep-alive connection that body would be parsed as the
+                    # next request line and poison whatever rides the pooled
+                    # connection next. Half-close instead of draining.
+                    self.close_connection = True
                 try:
                     body = b"" if payload is None else json.dumps(payload).encode("utf-8")
                 except (TypeError, ValueError, RecursionError):
@@ -263,6 +269,9 @@ class RpcServer:
                     length = int(self.headers.get("Content-Length") or 0)
                 except ValueError:
                     self._send_json(400, {"error": "Content-Length is not a number"})
+                    return
+                if length < 0:
+                    self._send_json(400, {"error": "Content-Length is negative"})
                     return
                 if length > rpc.max_body_bytes:
                     self._send_json(413, {"error": f"body exceeds {rpc.max_body_bytes} bytes"})

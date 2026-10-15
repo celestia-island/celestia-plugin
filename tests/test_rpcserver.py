@@ -198,13 +198,7 @@ def test_concurrent_single_and_batch_keep_their_shapes(server):
     t1 = threading.Thread(target=single)
     t1.start()
     assert started.wait(5)  # slow handler is inside the dispatch loop now
-    t2 = threading.Thread(
-        target=lambda: rpc_call(
-            base,
-            "fast.ping",  # batch lane fires while the single is mid-dispatch
-        )
-    )
-    # send an actual batch: two members, one request id
+    # an actual batch: two members, fired while the single is mid-dispatch
     def batch():
         body = json.dumps([
             {"jsonrpc": "2.0", "id": 21, "method": "fast.ping"},
@@ -287,6 +281,79 @@ def test_slow_client_socket_times_out(tmp_path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_early_answer_does_not_poison_keep_alive_connection(server):
+    """Reset-round N1: a 401 used to leave the unread request body in the
+    socket, so the NEXT request on the same keep-alive connection was
+    parsed against garbage ('400 Bad request syntax'). The connection now
+    half-closes after an early answer — the victim request gets its own
+    clean connection."""
+    import http.client
+    import urllib.parse
+
+    _, base = server
+    parsed = urllib.parse.urlsplit(base)
+    conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5)
+
+    # first: wrong token → 401 (server must close after this)
+    bad = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "engine.info"}).encode()
+    conn.request("POST", "/api/rpc?token=wrong", body=bad,
+                 headers={"Content-Type": "application/json"})
+    resp = conn.getresponse()
+    assert resp.status == 401
+    resp.read()
+
+    # The server must have marked the connection for closing (the unread
+    # body cannot stay in the socket). Reuse therefore ends in a CLEAN
+    # disconnect — not the "400 Bad request syntax" garbage the poisoned
+    # connection used to answer — and a fresh connection serves normally.
+    good = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "engine.info"}).encode()
+    # whichever way the half-close races the client, the reuse must end in
+    # a DISCONNECT (BrokenPipe on send / EOF on read) — never the poisoned
+    # "400 Bad request syntax" reply the old behavior produced.
+    with pytest.raises((http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError)):
+        conn.request("POST", f"/api/rpc?token={TOKEN}", body=good,
+                     headers={"Content-Type": "application/json"})
+        conn.getresponse()
+    conn.close()
+
+    conn2 = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5)
+    conn2.request("POST", f"/api/rpc?token={TOKEN}", body=good,
+                  headers={"Content-Type": "application/json"})
+    resp = conn2.getresponse()
+    body = json.loads(resp.read().decode())
+    assert resp.status == 200
+    assert body["result"]["name"] == "test-engine"
+    conn2.close()
+
+
+def test_negative_content_length_answers_400(server):
+    """Reset-round N2: int('-5') parsed fine but read(-5) blew the thread
+    with no HTTP answer at all. The gate must catch it."""
+    import socket
+
+    _, base = server
+    host, port = base.split("//")[1].split(":")
+    sock = socket.create_connection((host, int(port)), timeout=10)
+    try:
+        head = (
+            f"POST /api/rpc?token={TOKEN} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            "Content-Type: application/json\r\n"
+            "Connection: close\r\n"
+            "Content-Length: -5\r\n\r\n"
+        ).encode()
+        sock.sendall(head)
+        data = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        assert data.startswith(b"HTTP/1.1 400"), data[:120]
+    finally:
+        sock.close()
 
 
 def test_non_ascii_token_answers_401_not_broken_pipe(server):
