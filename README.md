@@ -13,8 +13,8 @@ Modules (v0.1.0):
 | module | purpose |
 |---|---|
 | `celestia_plugin.jsonrpc` | JSON-RPC 2.0 types, error codes, dialect constants |
-| `celestia_plugin.rpcserver` | threading HTTP server speaking the `POST /api/rpc?token=` dialect (single + batch, notification fan-out) and the `/health` endpoint (2xx gate for evernight `EngineBlueprint.health_path`) |
-| `celestia_plugin.jobs` | job table: submit / status / cancel / result, progress callbacks, cancellation tokens |
+| `celestia_plugin.rpcserver` | threading HTTP server speaking the `POST /api/rpc?token=` dialect (single + batch, notification fan-out, `events.poll` with evicted-tail `dropped` count) and the `/health` endpoint (2xx gate for evernight `EngineBlueprint.health_path`) |
+| `celestia_plugin.jobs` | job table: submit / status / cancel / result, progress callbacks, cancellation tokens, live-job ceiling (`max_queued`, `QueueFullError`) |
 | `celestia_plugin.artifacts` | artifact registration + serving (list / fetch) |
 | `celestia_plugin.config` | env/file configuration loading (bootstrap-root stays in 0600 env) |
 | `celestia_plugin.engine` | `EngineServer` facade + fail-closed env prerequisites (`python -m` entry helper) |

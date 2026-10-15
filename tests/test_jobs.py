@@ -138,6 +138,18 @@ def test_max_queued_bounds_live_jobs():
     drain(table)
 
 
+def test_engine_server_facade_wires_max_queued():
+    """The facade is the one-line entry most engine authors use — pin that
+    the ceiling actually reaches the table (R2 N1: deleting the wiring
+    once left the whole suite green)."""
+    from celestia_plugin.engine import EngineServer
+
+    engine = EngineServer(name="t", version="0", token="x", max_queued=3, max_workers=1)
+    assert engine.jobs._max_queued == 3
+    engine2 = EngineServer(name="t", version="0", token="x")
+    assert engine2.jobs._max_queued is None
+
+
 def test_max_queued_zero_is_rejected():
     import pytest
 
