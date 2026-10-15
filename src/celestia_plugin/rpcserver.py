@@ -92,7 +92,6 @@ class RpcServer:
         self._event_seq = 0
         self._event_lock = threading.Lock()
         self._started_at = time.time()
-        self._payload_was_batch = False
         self.max_body_bytes = 8 * 1024 * 1024
         if jobs is not None:
             jobs.set_event_sink(self.emit)
@@ -189,7 +188,10 @@ class RpcServer:
             from .jsonrpc import error_response
 
             return 200, error_response(None, exc.code, exc.message).to_payload()
-        self._payload_was_batch = raw.lstrip().startswith(b"[")
+        # Per-call local, never instance state: ThreadingHTTPServer runs
+        # handle_payload concurrently, and a shared flag would let a slow
+        # single request inherit a concurrent batch's reply shape.
+        was_batch = raw.lstrip().startswith(b"[")
 
         replies: list[dict[str, Any]] = []
         for req in requests:
@@ -200,7 +202,7 @@ class RpcServer:
             return 204, None
         # A bare request answers a single object; a batch (even of one)
         # answers an array — the chest fan-out lane rides the array shape.
-        return 200, (replies if self._payload_was_batch else replies[0])
+        return 200, (replies if was_batch else replies[0])
 
     # ── HTTP plumbing ───────────────────────────────────────────────
 
@@ -219,9 +221,10 @@ class RpcServer:
             def _send_json(self, status: int, payload: Any) -> None:
                 try:
                     body = b"" if payload is None else json.dumps(payload).encode("utf-8")
-                except TypeError:
-                    # A handler returned something unserializable — answer a
-                    # structured 500 instead of dropping the connection.
+                except (TypeError, ValueError, RecursionError):
+                    # A handler returned something unserializable (or a
+                    # circular/degenerate structure) — answer a structured
+                    # 500 instead of dropping the connection.
                     status, body = 500, json.dumps(
                         {"jsonrpc": JSONRPC_VERSION, "id": None,
                          "error": {"code": INTERNAL_ERROR,
@@ -256,7 +259,11 @@ class RpcServer:
                 if not self._authorized():
                     self._send_json(401, {"error": "unauthorized"})
                     return
-                length = int(self.headers.get("Content-Length") or 0)
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    self._send_json(400, {"error": "Content-Length is not a number"})
+                    return
                 if length > rpc.max_body_bytes:
                     self._send_json(413, {"error": f"body exceeds {rpc.max_body_bytes} bytes"})
                     return

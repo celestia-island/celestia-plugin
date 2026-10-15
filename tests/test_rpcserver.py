@@ -169,6 +169,60 @@ def test_unserializable_handler_result_answers_500_not_disconnect(server):
     assert status == 200
 
 
+def test_concurrent_single_and_batch_keep_their_shapes(server):
+    """R3-1 red test: the reply-shape flag used to be shared instance state,
+    so a concurrent batch flipped a slow single request's reply into an
+    array. Shapes must be per-call."""
+    import threading
+    import time
+
+    rpc, base = server
+    started = threading.Event()
+
+    @rpc.method("slow.ping")
+    def slow(_params, _ctx):
+        started.set()
+        time.sleep(0.5)
+        return {"slow": True}
+
+    @rpc.method("fast.ping")
+    def fast(_params, _ctx):
+        return {"fast": True}
+
+    single_result = {}
+
+    def single():
+        status, payload = rpc_call(base, "slow.ping")
+        single_result["payload"] = payload
+
+    t1 = threading.Thread(target=single)
+    t1.start()
+    assert started.wait(5)  # slow handler is inside the dispatch loop now
+    t2 = threading.Thread(
+        target=lambda: rpc_call(
+            base,
+            "fast.ping",  # batch lane fires while the single is mid-dispatch
+        )
+    )
+    # send an actual batch: two members, one request id
+    def batch():
+        body = json.dumps([
+            {"jsonrpc": "2.0", "id": 21, "method": "fast.ping"},
+            {"jsonrpc": "2.0", "id": 22, "method": "fast.ping"},
+        ]).encode()
+        req = urllib.request.Request(f"{base}/api/rpc?token={TOKEN}", data=body)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+
+    t2 = threading.Thread(target=batch)
+    t2.start()
+    t2.join(5)
+    t1.join(5)
+    payload = single_result["payload"]
+    assert isinstance(payload, dict), f"single reply shape polluted by concurrent batch: {type(payload)}"
+    assert payload["result"] == {"slow": True}
+
+
 def test_batch_of_one_answers_array(server):
     """R2 N2: a batch with a single member is still a batch — the reply
     keeps the array shape (the chest fan-out lane rides it)."""

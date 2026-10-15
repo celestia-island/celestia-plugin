@@ -17,6 +17,7 @@ Modules (v0.1.0):
 | `celestia_plugin.jobs` | job table: submit / status / cancel / result, progress callbacks, cancellation tokens |
 | `celestia_plugin.artifacts` | artifact registration + serving (list / fetch) |
 | `celestia_plugin.config` | env/file configuration loading (bootstrap-root stays in 0600 env) |
+| `celestia_plugin.engine` | `EngineServer` facade + fail-closed env prerequisites (`python -m` entry helper) |
 
 Status: **pre-release** — v0.1.0 is consumed via git dependency / local path
 only. PyPI publication is a separate, user-gated decision.
