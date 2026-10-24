@@ -14,7 +14,7 @@ from .artifacts import ArtifactStore
 from .config import load_config
 from .engine import EngineServer, artifacts_dir_from_env, ensure_prerequisites, token_from_env
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "JSONRPC_VERSION",
