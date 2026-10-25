@@ -1,0 +1,39 @@
+name: CI
+
+# One in-flight run per ref: a superseded push cancels its predecessor instead
+# of queueing behind it on the shared farm (AGENTS [[ci]], ci-ops 8.3.3).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Fork pull requests pay for their own CI: this job runs on the shared
+    # self-hosted farm, so an untrusted tree must not spend org runner time.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Test (pytest)
+    runs-on: [self-hosted, linux, x64, local]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        env:
+          GIT_CONFIG_COUNT: "0"
+      # No actions/setup-python: it ships no Debian 12 builds and fails
+      # deterministically on the org's self-hosted nodes (see ci-state).
+      - name: Setup python
+        run: python3 -m venv .venv
+      - name: Install
+        run: .venv/bin/pip install -e ".[dev]"
+      - name: Test
+        run: .venv/bin/python -m pytest tests/ -q
