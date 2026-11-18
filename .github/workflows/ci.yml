@@ -14,9 +14,6 @@ permissions:
 
 jobs:
   test:
-    # Fork pull requests pay for their own CI: this job runs on the shared
-    # self-hosted farm, so an untrusted tree must not spend org runner time.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Test (pytest)
     runs-on: [self-hosted, linux, x64, local]
     timeout-minutes: 60
