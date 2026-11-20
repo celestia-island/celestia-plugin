@@ -32,9 +32,7 @@ from typing import Any, Callable
 
 from .jsonrpc import (
     INTERNAL_ERROR,
-    INVALID_REQUEST,
     METHOD_NOT_FOUND,
-    PARSE_ERROR,
     JSONRPC_VERSION,
     RpcError,
     RpcRequest,
