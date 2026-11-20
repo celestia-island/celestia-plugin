@@ -1,7 +1,6 @@
 """Artifact store containment and integrity; config loading rules."""
 
 import json
-import os
 
 import pytest
 
